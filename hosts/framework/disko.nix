@@ -1,15 +1,18 @@
-# STUB disk layout — tracer-bullet slice (#16).
+# Declarative disk layout (#17) — replaces the #16 ext4 stub wholesale.
 #
-# This exists only to give the dry-build an honest root filesystem + ESP so
-# `nixos-rebuild build` exercises real module composition. It is deliberately
-# trivial: a plain GPT with a vfat ESP and a single ext4 root, NO encryption.
-#
-# The real layout — LUKS2 + btrfs subvolumes (/root, /home, /nix), zstd/noatime,
-# TRIM, zram-only swap — lands in its own slice (#17) and replaces this file
-# wholesale. Don't build on top of this; it's scaffolding.
+# GPT with a ~1G vfat ESP (/boot) and a single LUKS2 container spanning the rest.
+# Inside the LUKS container: one btrfs filesystem with subvolumes /root, /home,
+# /nix — all zstd/noatime. Encryption, subvolumes, and TRIM here; zram swap and
+# snapper live in the host module (default.nix). See ADR-0003.
+let
+  # One compression/atime policy shared by every btrfs subvolume, single-sourced.
+  btrfsMountOptions = [ "compress=zstd" "noatime" ];
+in
 {
   disko.devices.disk.main = {
-    # Placeholder — the real device comes from `lsblk` at install time (#17).
+    # PLACEHOLDER — set this at install time from `lsblk` (e.g. /dev/nvme0n1).
+    # The real device name is an install-time fact, not a config decision, so it
+    # is deliberately NOT a real value committed here.
     device = "/dev/nvme0n1";
     type = "disk";
     content = {
@@ -22,15 +25,47 @@
             type = "filesystem";
             format = "vfat";
             mountpoint = "/boot";
+            # Restrict the ESP: only root can read it (it holds the boot image).
             mountOptions = [ "umask=0077" ];
           };
         };
-        root = {
+        # Everything else is one LUKS2 container. TPM2+PIN enrollment (ADR-0003)
+        # happens out-of-band at install; disko only declares the container so
+        # `boot.initrd.luks.devices."cryptroot"` is generated for us.
+        luks = {
           size = "100%";
           content = {
-            type = "filesystem";
-            format = "ext4";
-            mountpoint = "/";
+            type = "luks";
+            name = "cryptroot";
+            settings = {
+              # TRIM through the LUKS layer for SSD longevity. ADR-0003 accepts the
+              # block-usage metadata leak this implies.
+              allowDiscards = true;
+            };
+            content = {
+              type = "btrfs";
+              extraArgs = [ "-f" ];
+              # Three sibling top-level subvolumes. Snapper watches /home only
+              # (default.nix), so / and /nix are never snapshotted — /nix's
+              # exclusion is a consequence of that, not of any nesting.
+              subvolumes = {
+                # / — snapshotting the system is NixOS generations' job, not snapper's.
+                "/root" = {
+                  mountpoint = "/";
+                  mountOptions = btrfsMountOptions;
+                };
+                # /home — the only subvolume snapper watches (see default.nix).
+                "/home" = {
+                  mountpoint = "/home";
+                  mountOptions = btrfsMountOptions;
+                };
+                # /nix — build artifacts, deliberately outside snapper's scope.
+                "/nix" = {
+                  mountpoint = "/nix";
+                  mountOptions = btrfsMountOptions;
+                };
+              };
+            };
           };
         };
       };

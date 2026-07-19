@@ -31,6 +31,25 @@
   # suspend quirk is already fixed upstream in Linux >=6.7, and we run linuxPackages_latest,
   # so enabling it would only cost keyboard-wake for no benefit. Don't "fix" this. (#12)
 
+  # --- Swap ---
+  # zram-only swap: a compressed RAM block device, NO disk swapfile and NO
+  # `resume_offset`. This preserves the cold-boot posture (ADR-0003) — there is no
+  # on-disk swap for the LUKS master key to leak into, and no hibernation image to
+  # couple into the signed UKI. The btrfs layout (disko.nix) deliberately carries no
+  # swap partition to match.
+  zramSwap.enable = true;
+
+  # --- Snapshots ---
+  # snapper watches /home ONLY (its own btrfs subvolume, disko.nix). System rollback
+  # is NixOS generations' job, so / is not snapshotted here; /nix is a separate
+  # subvolume so it is never captured either. Timeline snapshots with automatic
+  # cleanup, on the module's default schedule.
+  services.snapper.configs.home = {
+    SUBVOLUME = "/home";
+    TIMELINE_CREATE = true;
+    TIMELINE_CLEANUP = true;
+  };
+
   # --- User ---
   # Real credential handling lands with the sops slice. For now the account is locked
   # ("!" is not a valid hash, so no password authenticates) — no plaintext in the repo.
