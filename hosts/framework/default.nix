@@ -47,6 +47,32 @@
   # The idle->poweroff at ~20 min IS enforced declaratively below (Power); the ~5-min
   # blank+lock is left as a session/hardware-checklist item (#24).
 
+  # --- Fingerprint auth (fprintd) ---
+  # Genuine opt-in: the framework-13-7040-amd hardware module does NOT set
+  # services.fprintd (verified upstream), so nothing here duplicates it. The Framework's
+  # Goodix Match-on-Chip sensor is supported by the IN-TREE libfprint, so we do NOT enable
+  # services.fprintd.tod — the Touch OEM Driver path is for readers that need an
+  # out-of-tree blob, which this one doesn't. Committed UNCONDITIONALLY (not gated on
+  # hardware detection); actual enrolment is verified on-hardware in checklist #24.
+  # Scope is deliberately narrow: this is login + sudo convenience only. It is NOT commit
+  # signing (#19) and NOT LUKS unlock (#5) — the disk is still unlocked by the TPM+PIN.
+  services.fprintd.enable = true;
+
+  # Add the fingerprint reader as an ADDITIONAL auth method on exactly the four PAM stacks
+  # that matter for login + sudo. fprintAuth is additive: it sits alongside the existing
+  # unix/password auth, so PASSWORD FALLBACK IS RETAINED on all four — a failed, slow, or
+  # unenrolled fingerprint always falls through to the password and can never lock Drew
+  # out. (nixpkgs defaults fprintAuth to services.fprintd.enable, but we pin these four
+  # explicitly to document the intended scope rather than rely on the global default.)
+  #   - cosmic-greeter: the graphical login (PAM entry created by the COSMIC module above)
+  #   - sudo:           fingerprint instead of retyping the password for privilege escalation
+  #   - polkit-1:       GUI privilege prompts (COSMIC settings, mounting, etc.)
+  #   - login:          the TTY/console login fallback
+  security.pam.services.cosmic-greeter.fprintAuth = true;
+  security.pam.services.sudo.fprintAuth = true;
+  security.pam.services.polkit-1.fprintAuth = true;
+  security.pam.services.login.fprintAuth = true;
+
   # --- Power ---
   # power-profiles-daemon is enabled by the framework-13-7040-amd module; we rely on it
   # and NEVER enable tlp (running both fights over the same knobs on AMD Framework).
