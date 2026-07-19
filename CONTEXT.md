@@ -78,3 +78,16 @@ of the taxonomy — trivially regenerable, so it earns no sops ceremony.
 _Avoid_: conflating with the **Secure Boot signing key** — that one is precious,
 sops-committed, and signs boot images; this one is throwaway, uncommitted, and
 signs commits. Also not an *auth* key (it does not push).
+
+**Cold-boot posture**:
+The whole-machine stance that the LUKS master key must never sit in *powered* RAM
+while the laptop is out of the user's hands — the reason there is no suspend or
+hibernation. It is enforced across layers: no disk swap / no hibernation
+([ADR-0003](docs/adr/0003-luks-tpm-pin-encrypted-btrfs.md)), sleep targets
+**hard-masked**, power button and idle-timeout both **power the machine off**
+([ADR-0005](docs/adr/0005-cosmic-desktop-cold-boot-power.md)). Its one hole is a
+laptop left **running with the lid closed** (lid = lock, not power off), which the
+idle→poweroff timer closes on a delay. "Cold" means *powered off*, not merely
+*locked* — a locked-but-running machine still holds the key.
+_Avoid_: "suspended", "asleep" (there is no such state here); "locked" as a synonym
+for *cold* — a locked session is still powered, keys still in RAM.
