@@ -47,3 +47,16 @@ Secure Boot signing key — and is what re-encrypts secrets to a fresh Host age 
 after a reinstall. Every secret is encrypted to *both* age keys (two recipients).
 _Avoid_: conflating with the Host age key — losing the admin key means a dead
 laptop is an unrecoverable lockout; losing the host key is a re-key, not a loss.
+
+**Commit signing key**:
+The Ed25519 **SSH** key that signs git commits and annotated tags
+(`gpg.format = ssh`, `commit.gpgsign` + `tag.gpgsign` = true). A *dedicated*
+key — distinct from the SSH key that authenticates pushes to GitHub — so the
+sign and push roles never blur. It is **generated on-machine, never committed**,
+plaintext in `~/.ssh` and protected at rest by LUKS (no passphrase). Disposable:
+lose it and you regenerate + re-upload the public half to GitHub. It is a
+*signing* key like the Secure Boot key, but lives with the **Host age key** side
+of the taxonomy — trivially regenerable, so it earns no sops ceremony.
+_Avoid_: conflating with the **Secure Boot signing key** — that one is precious,
+sops-committed, and signs boot images; this one is throwaway, uncommitted, and
+signs commits. Also not an *auth* key (it does not push).
