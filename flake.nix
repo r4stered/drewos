@@ -34,19 +34,28 @@
   };
 
   outputs =
-    { nixpkgs, nixos-hardware, disko, ... }:
+    { nixpkgs, nixos-hardware, disko, home-manager, lanzaboote, ... }:
     {
       # Single seam: `nixos-rebuild build --flake .#framework`
       # (== `nix build .#nixosConfigurations.framework.config.system.build.toplevel`).
-      # This slice composes only the hardware module + disko; lanzaboote / sops-nix /
-      # home-manager inputs are pinned and ready but wired in by their own later slices.
+      # This slice composes the hardware module + disko + home-manager (ADR-0004, #19)
+      # + lanzaboote (signed-UKI custom-key Secure Boot, ADR-0002, #21); sops-nix is
+      # pinned and ready but wired in by its own later slice (#18).
       nixosConfigurations.framework = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
           nixos-hardware.nixosModules.framework-13-7040-amd
           disko.nixosModules.disko
+          # home-manager wired as a NixOS module → user config rides inside the same
+          # generation as the system (one rebuild, one rollback). ADR-0004.
+          home-manager.nixosModules.home-manager
+          # lanzaboote: provides `boot.lanzaboote.*`, replacing systemd-boot with a signed
+          # Unified Kernel Image booted under our OWN Secure Boot keys (ADR-0002, #21).
+          # The host module (default.nix) enables and configures it.
+          lanzaboote.nixosModules.lanzaboote
           ./hosts/framework/disko.nix
           ./hosts/framework/default.nix
+          ./hosts/framework/home.nix
         ];
       };
     };

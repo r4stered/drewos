@@ -8,16 +8,79 @@
 { pkgs, ... }:
 {
   # --- Boot ---
-  # systemd-boot is a TEMPORARY placeholder. It gets swapped for lanzaboote (signed
-  # UKI + custom-key Secure Boot, ADR-0002) in the Secure Boot slice. This slice just
-  # needs *a* bootloader so the dry-build is honest.
-  boot.loader.systemd-boot.enable = true;
+  # lanzaboote (ADR-0002, #21) replaces systemd-boot. It boots a signed Unified Kernel
+  # Image — kernel + initrd + kernel cmdline bundled into one PE binary and signed with
+  # OUR OWN Secure Boot keys. This supersedes the earlier temporary systemd-boot stub.
+  #
+  # systemd-boot is explicitly turned OFF: lanzaboote installs its own stub as the boot
+  # entry and the two loaders cannot coexist.
+  boot.loader.systemd-boot.enable = false;
+
+  # Custom keys ONLY. We enroll our own sbctl-generated PK/KEK/db with NO shim and NO
+  # Microsoft keys (ADR-0002): the 7840U has no MS-signed option ROM to accommodate, so
+  # owning the whole key hierarchy is the cleaner, stronger posture. Consequence: media
+  # signed only by Microsoft (stock Windows installer, some vendor recovery ISOs) will
+  # not boot unless self-signed or SB is temporarily disabled in BIOS for rescue.
+  boot.lanzaboote = {
+    enable = true;
+
+    # On-device sbctl PKI bundle. The PK/KEK/db key material is generated on the
+    # unlocked machine by `sbctl create-keys` and lives here — it is a HARDWARE RITUAL
+    # (checklist #24), never committed to the repo. Keeping eval green only requires the
+    # path to be declared; the keys need not exist at build time on this Darwin dev box.
+    #
+    # sops seam (#18, OPEN): once sops-nix lands, the Secure Boot *signing* private key
+    # should be provisioned as a sops-nix secret (committed encrypted, decrypted only on
+    # the unlocked machine) and pointed at from here per ADR-0002. Until #18 lands we use
+    # the plain on-device sbctl bundle so NOTHING secret is fabricated or committed now.
+    pkiBundle = "/var/lib/sbctl";
+  };
+
+  # Still needed for lanzaboote to write/update the EFI boot entry for the signed UKI.
   boot.loader.efi.canTouchEfiVariables = true;
+
+  # NOTE (handoff reversal): this config assumes Secure Boot is ENROLLED and ON with our
+  # keys. This deliberately reverses the old handoff's stale "disable Secure Boot" step —
+  # that guidance predates lanzaboote (ADR-0002). Because the kernel cmdline is embedded
+  # inside the signed UKI, systemd-stub ignores any externally injected cmdline while SB
+  # is on, which closes the classic `init=/bin/sh` and evil-maid-initrd attacks.
 
   # Pinned-latest kernel (Linux 7.1, cache-backed) — NOT the stable default (6.18).
   # A per-package opt-in on the stable channel, not a switch to unstable (ADR-0001).
   # The 7040 wants a recent kernel for brightness control and power draw.
   boot.kernelPackages = pkgs.linuxPackages_latest;
+
+  # --- Disk unlock (LUKS TPM2 + PIN, ADR-0003, #23) ---
+  # The root LUKS2 container "cryptroot" (declared in disko.nix) is unlocked at boot by
+  # the TPM2, sealed to the Secure Boot state, AND gated behind a PIN. This is the
+  # declarative half only — the actual keyslot is created on hardware (#24) with:
+  #   systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 --tpm2-with-pin=yes <dev>
+  #
+  # PIN is LOAD-BEARING (--tpm2-with-pin). A TPM auto-unlock authenticates the *platform,
+  # not the person*: a no-PIN setup would let a stolen, powered-off laptop DECRYPT ITSELF
+  # on boot, forfeiting FDE's whole guarantee. The PIN restores "possess the powered-off
+  # device, get nothing". The TPM's hardware anti-hammering lets the PIN be short while
+  # still resisting brute force. Platform-only / no-PIN unlock must NEVER be used here.
+  #
+  # PCR 7 ONLY — do NOT add PCR 0/4/11 (ADR-0003):
+  #   * PCR 0 breaks on every firmware update (frequent on Framework).
+  #   * PCR 4/11 break on most rebuilds unless a signed PCR policy is set up (deferred).
+  # PCR 7 alone enforces "Secure Boot ON, with our keys" and is stable across kernel and
+  # firmware updates. Combined with the signed UKI (fixed cmdline, bundled initrd) from
+  # ADR-0002 this gives evil-maid resistance without brittleness. DO NOT bind more PCRs.
+  #
+  # Fallbacks (both must always remain):
+  #   * The passphrase keyslot disko created stays present (verify, never remove it).
+  #   * A high-entropy recovery key lives in the password manager. A TPM re-seal after a
+  #     firmware update or a Secure Boot toggle invalidates the TPM keyslot — the
+  #     passphrase / recovery key are the ONLY thing standing between Drew and lockout,
+  #     after which `systemd-cryptenroll` is re-run to re-bind the TPM.
+  #
+  # crypttabExtraOpts requires the systemd-based initrd, so we enable it. The PCR policy
+  # and PIN requirement are baked into the enrolled keyslot metadata by cryptenroll, so
+  # crypttab only needs to point unlocking at the TPM device (`tpm2-device=auto`).
+  boot.initrd.systemd.enable = true;
+  boot.initrd.luks.devices."cryptroot".crypttabExtraOpts = [ "tpm2-device=auto" ];
 
   # --- Networking ---
   networking.hostName = "framework";
@@ -58,7 +121,16 @@
     description = "Drew Williams";
     extraGroups = [ "wheel" "networkmanager" ];
     hashedPassword = "!"; # placeholder — sops slice replaces this with a real hash
+    # fish is the interactive login shell (CONTEXT.md). bash stays the scripting shell and
+    # is always present regardless. drew's *personal* fish config is home-manager's (home.nix).
+    shell = pkgs.fish;
   };
+
+  # System-level: puts fish in /etc/shells (so it is a valid login shell) and wires vendor
+  # completions — the "fish exists on this machine" half (a second user could use it, so it
+  # is a system concern). Sits here beside the login-shell assignment so all system-level
+  # fish wiring is in one place.
+  programs.fish.enable = true;
 
   # Load-bearing minimum for a from-repo rebuild workflow; broader package curation
   # is deliberately deferred (issue #15 out-of-scope).

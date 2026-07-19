@@ -18,3 +18,8 @@
 
 # Scaffolding scripts
 !scripts/issues-map.sh
+
+# Defense-in-depth: the commit signing key (id_ed25519_signing) is generated in
+# ~/.ssh and never lives in the repo — but never let its private half in if copied
+# here by accident. The PUBLIC allowed_signers / .pub are non-secret and stay tracked.
+id_ed25519_signing
