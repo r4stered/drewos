@@ -50,6 +50,38 @@
   # The 7040 wants a recent kernel for brightness control and power draw.
   boot.kernelPackages = pkgs.linuxPackages_latest;
 
+  # --- Disk unlock (LUKS TPM2 + PIN, ADR-0003, #23) ---
+  # The root LUKS2 container "cryptroot" (declared in disko.nix) is unlocked at boot by
+  # the TPM2, sealed to the Secure Boot state, AND gated behind a PIN. This is the
+  # declarative half only — the actual keyslot is created on hardware (#24) with:
+  #   systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 --tpm2-with-pin=yes <dev>
+  #
+  # PIN is LOAD-BEARING (--tpm2-with-pin). A TPM auto-unlock authenticates the *platform,
+  # not the person*: a no-PIN setup would let a stolen, powered-off laptop DECRYPT ITSELF
+  # on boot, forfeiting FDE's whole guarantee. The PIN restores "possess the powered-off
+  # device, get nothing". The TPM's hardware anti-hammering lets the PIN be short while
+  # still resisting brute force. Platform-only / no-PIN unlock must NEVER be used here.
+  #
+  # PCR 7 ONLY — do NOT add PCR 0/4/11 (ADR-0003):
+  #   * PCR 0 breaks on every firmware update (frequent on Framework).
+  #   * PCR 4/11 break on most rebuilds unless a signed PCR policy is set up (deferred).
+  # PCR 7 alone enforces "Secure Boot ON, with our keys" and is stable across kernel and
+  # firmware updates. Combined with the signed UKI (fixed cmdline, bundled initrd) from
+  # ADR-0002 this gives evil-maid resistance without brittleness. DO NOT bind more PCRs.
+  #
+  # Fallbacks (both must always remain):
+  #   * The passphrase keyslot disko created stays present (verify, never remove it).
+  #   * A high-entropy recovery key lives in the password manager. A TPM re-seal after a
+  #     firmware update or a Secure Boot toggle invalidates the TPM keyslot — the
+  #     passphrase / recovery key are the ONLY thing standing between Drew and lockout,
+  #     after which `systemd-cryptenroll` is re-run to re-bind the TPM.
+  #
+  # crypttabExtraOpts requires the systemd-based initrd, so we enable it. The PCR policy
+  # and PIN requirement are baked into the enrolled keyslot metadata by cryptenroll, so
+  # crypttab only needs to point unlocking at the TPM device (`tpm2-device=auto`).
+  boot.initrd.systemd.enable = true;
+  boot.initrd.luks.devices."cryptroot".crypttabExtraOpts = [ "tpm2-device=auto" ];
+
   # --- Networking ---
   networking.hostName = "framework";
   networking.networkmanager.enable = true;
