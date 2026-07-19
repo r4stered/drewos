@@ -36,6 +36,9 @@
     pkiBundle = "/var/lib/sbctl";
   };
 
+  # NOTE: the `sbctl` CLI needed to enroll and audit these keys is in
+  # environment.systemPackages below — lanzaboote does not provide it.
+
   # Still needed for lanzaboote to write/update the EFI boot entry for the signed UKI.
   boot.loader.efi.canTouchEfiVariables = true;
 
@@ -398,6 +401,19 @@
   environment.systemPackages = with pkgs; [
     git
     vim
+
+    # Secure Boot key management (ADR-0002). The lanzaboote module provides the *signing*
+    # machinery — `lzbt` runs at install/rebuild time and needs no CLI on PATH — but does
+    # NOT put sbctl in the system profile; upstream's quickstart has you add it yourself.
+    # Without it `sbctl enroll-keys` is not found on the installed machine, which strands
+    # the Secure Boot enrollment step of the ritual (docs/hardware-acceptance.md, C4).
+    #
+    # Not just a bring-up tool: `sbctl status` and `sbctl verify` are how you confirm the
+    # boot chain is still intact after a firmware update or a Secure Boot re-enrollment,
+    # both of which are expected recurring events (ADR-0003's PCR 7 re-enroll note).
+    # System-level rather than home-manager because it administers the machine's boot
+    # chain and runs as root — not personal userland (CONTEXT.md, "Package homes").
+    sbctl
   ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
