@@ -50,6 +50,26 @@
   # The 7040 wants a recent kernel for brightness control and power draw.
   boot.kernelPackages = pkgs.linuxPackages_latest;
 
+  # --- Firmware ---
+  # `nixos-generate-config` normally writes this into hardware-configuration.nix. This
+  # repo has no such file — disko.nix supplies the filesystems instead — so NOTHING else
+  # sets it, and the option defaults to false. Verified by eval before this line existed:
+  # enableRedistributableFirmware, enableAllFirmware, and hardware.cpu.amd.updateMicrocode
+  # were all false, and hardware.firmware was empty.
+  #
+  # It is genuinely load-bearing on this machine, not a nicety: without linux-firmware the
+  # amdgpu driver has no blob to load (so COSMIC comes up on a broken or blank panel) and
+  # the MediaTek MT7922 has no Wi-Fi firmware (so the installed system has no network to
+  # rebuild itself from). nixos-hardware's framework-13-7040-amd does not set this; its
+  # common-cpu-amd only defaults `hardware.cpu.amd.updateMicrocode` *from* it, so flipping
+  # this one option also turns on AMD microcode updates.
+  #
+  # Redistributable only, deliberately. `enableAllFirmware` would additionally pull blobs
+  # under unfree/unredistributable licenses for hardware this laptop does not have, and
+  # would require adding `nixpkgs.config.allowUnfree` to a config that currently has no
+  # unfree flag at all.
+  hardware.enableRedistributableFirmware = true;
+
   # --- Disk unlock (LUKS TPM2 + PIN, ADR-0003, #23) ---
   # The root LUKS2 container "cryptroot" (declared in disko.nix) is unlocked at boot by
   # the TPM2, sealed to the Secure Boot state, AND gated behind a PIN. This is the
