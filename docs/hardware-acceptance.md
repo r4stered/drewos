@@ -28,7 +28,7 @@ hardware-only checks come last.
 - [ ] **Fingerprint:** `lsusb` shows `27c6:609c`, firmware current, `fprintd-enroll` succeeds
 - [ ] **Fingerprint gating:** cosmic-greeter login and `sudo` accept a finger; password fallback still works
 - [ ] **Commit signing:** dedicated Ed25519 key generated, git points at it, **public** half uploaded to GitHub as a *Signing key*, pubkey + `allowed_signers` committed
-- [ ] **Secrets (sops):** secrets decrypt at activation; no plaintext in the repo
+- [ ] **Secrets (sops):** host key generated *before* the first install, both recipients in `.sops.yaml`, secrets decrypt at activation, no plaintext in the repo
 - [ ] **Brightness keys** change the panel backlight
 - [ ] **Wi-Fi** connects via NetworkManager
 - [ ] **COSMIC trackpad gestures + fractional scaling** feel right on the 13" panel *(research-#5 gap — validate here)*
@@ -212,23 +212,159 @@ blur. It is generated on-machine, never committed, and protected at rest by LUKS
 
 ## Secrets (sops) — decrypt at activation, no plaintext in repo
 
-*Depends on the sops scaffolding (slice #18), which is **human-in-the-loop**:
-Drew provides the **admin age key** off-machine and the **host key** public half.
-See CONTEXT.md, "Host age key" / "Admin age key".*
+*Relates to slice #18. See CONTEXT.md, "Host age key" / "Admin age key".*
 
 Every secret is encrypted to two recipients — the admin age key (off-machine, in
 the password manager) and the laptop's host age key (its SSH host key, root-only
-on the encrypted root). The machine decrypts at *activation*.
+on the encrypted root). The machine decrypts at *activation*. The recipient list
+lives in `.sops.yaml`; the NixOS wiring lives in `hosts/framework/secrets.nix`.
 
-- [ ] **Secrets decrypt at activation.** After a `nixos-rebuild switch`, confirm
-      the sops-nix secrets materialized (e.g. under `/run/secrets/…`) and the
-      services that consume them came up — including the Secure Boot signing key,
-      which is itself a sops secret (ADR-0002). A decryption failure here surfaces
-      as an activation error or a service that can't start.
-- [ ] **No plaintext in the repo.** `git grep` / a scan of the tree shows only
-      the *encrypted* forms; no decrypted secret is committed. The account
-      password, the SB signing private key, and any other secret exist in the repo
-      only as sops ciphertext.
+### The ordering constraint — read this before installing
+
+**The host key must exist, and `.sops.yaml` must already list it, before the
+first activation.** sops is not a lookup: a secret can only be decrypted by a key
+that was a *recipient at encryption time*. So a laptop cannot bootstrap itself —
+generating its host key during the first activation would be too late to decrypt
+anything encrypted before that moment. The config therefore does **not**
+auto-generate the key (`secrets.nix` explains why at length); you generate it by
+hand, in the installer, *before* `nixos-install`.
+
+Get this wrong and the first boot lands you at a cosmic-greeter you cannot pass:
+`users.mutableUsers = false` means the sops hash is the only password, and there
+is no earlier NixOS generation to roll back to. Recovery is the install-media
+path at the bottom of this section.
+
+The steps below are ordered to make that impossible. Do them in order.
+
+### Phase A — on the dev machine, before touching the laptop
+
+> **Already done as of #18 — skip to Phase B.** `.sops.yaml` carries a real admin
+> recipient and `secrets/users.yaml` is committed as ciphertext, so Phase A is
+> recorded here for the *re-do* cases (a lost admin age key, a password change, a
+> fresh start), not as pending work. Do **not** run step 1 again on the current
+> setup: a new admin age key cannot decrypt the already-committed ciphertext, and
+> `sops updatekeys` in step 7 would then fail with nothing able to re-key it.
+
+1. **Generate the admin age key.** Print it to the terminal; do *not* write it to
+   a file on a machine that isn't encrypted at rest:
+   ```
+   nix shell nixpkgs#age -c age-keygen
+   ```
+   Put the `AGE-SECRET-KEY-1…` line in the **password manager** immediately, and
+   the `# public key: age1…` line into `.sops.yaml` as the admin recipient. The
+   private half must never land on the laptop or in the repo. **This is the one
+   key whose loss is unrecoverable** — a reinstalled laptop is re-keyed *from*
+   this key, so without it every committed secret is permanently unreadable.
+
+2. **Generate the password hash.** yescrypt, and note it is a *hash* — the
+   plaintext password never leaves your head:
+   ```
+   nix shell nixpkgs#mkpasswd -c mkpasswd -m yescrypt
+   ```
+
+3. **Encrypt it.** With the admin key in the environment (paste from the password
+   manager; it stays out of shell history if you use a leading space or read it
+   into the var):
+   ```
+   read -rs SOPS_AGE_KEY && export SOPS_AGE_KEY
+   nix shell nixpkgs#sops -c sops secrets/users.yaml
+   ```
+   The editor opens on a new file; the single key it must contain is:
+   ```yaml
+   drew_password_hash: $y$j9T$…the mkpasswd output…
+   ```
+   Save, then confirm the file on disk is ciphertext (`grep drew_password_hash
+   secrets/users.yaml` should show an `ENC[…]` value, not the hash). Commit it.
+
+- [ ] Admin age key generated, private half **in the password manager only**
+- [ ] `secrets/users.yaml` committed as ciphertext, password hash inside
+
+### Phase B — in the installer, before `nixos-install`
+
+4. **Partition and mount** via disko so the target root is at `/mnt`.
+
+5. **Generate the host key into the target root.** This is the key the machine
+   will decrypt with, and `/etc/ssh` on the target is on the LUKS-encrypted root:
+   ```
+   mkdir -p /mnt/etc/ssh
+   ssh-keygen -t ed25519 -N "" -f /mnt/etc/ssh/ssh_host_ed25519_key
+   ```
+   No sshd is or will be running — we want the key, not the server.
+
+6. **Convert the public half to an age recipient** and read it off the screen:
+   ```
+   nix shell nixpkgs#ssh-to-age -c ssh-to-age -i /mnt/etc/ssh/ssh_host_ed25519_key.pub
+   ```
+   This prints an `age1…` line. It is a **public** recipient — non-secret, safe to
+   copy by hand, screenshot, or type out.
+
+7. **Re-key, back on the dev machine** (not in the installer — this needs the
+   admin private key, which should stay on the one trusted machine). Uncomment the
+   host recipient in `.sops.yaml`, paste in the `age1…` from step 6, then:
+   ```
+   read -rs SOPS_AGE_KEY && export SOPS_AGE_KEY
+   nix shell nixpkgs#sops -c sops updatekeys secrets/users.yaml
+   ```
+   `updatekeys` re-encrypts the existing secret to the *new* recipient list — this
+   is the admin key doing the one job it exists for. Commit and push.
+
+8. **Install**, pulling the just-pushed config:
+   ```
+   nixos-install --flake github:r4stered/drewos#framework
+   ```
+
+- [ ] Host key generated at `/mnt/etc/ssh/ssh_host_ed25519_key` **before** install
+- [ ] `.sops.yaml` lists **both** recipients; `sops updatekeys` run and committed
+
+### Phase C — after first boot, confirm
+
+- [ ] **Secrets decrypt at activation.** After a `nixos-rebuild switch`, the
+      secret materialized and is a hash, not an error:
+      ```
+      sudo ls -l /run/secrets-for-users/drew_password_hash
+      ```
+      A decryption failure surfaces as an activation error naming
+      `sops-install-secrets`; the usual cause is step 7 having been skipped, so the
+      ciphertext has no recipient this machine holds.
+- [ ] **The password actually works** — log in at cosmic-greeter, and `sudo -k &&
+      sudo true` accepts it. Do this *before* you trust the machine, while install
+      media is still to hand.
+- [ ] **No plaintext in the repo.** A scan of the tree shows only encrypted forms
+      — the account password and any later secret exist in the repo only as sops
+      ciphertext:
+      ```
+      grep -rn "ENC\[" secrets/
+      git grep -nI '\$y\$\|AGE-SECRET-KEY' -- . ':!secrets/' ':!docs/'
+      ```
+      The first should list ciphertext; the second should find **nothing**. `docs/`
+      is excluded because this very checklist names those patterns in its
+      instructions — it would otherwise always match itself and train you to
+      ignore a real hit.
+- [ ] **Admin key is off-machine.** It appears nowhere on the laptop:
+      `sudo grep -rl AGE-SECRET-KEY /etc /var /home` finds nothing.
+
+### Re-keying after a reinstall
+
+A fresh install means a fresh host key, so every secret must be re-encrypted to
+it. This is the routine case, not an emergency — losing the *host* key is a re-key,
+losing the *admin* key is a loss (CONTEXT.md).
+
+Repeat steps 5–7: generate the new host key, `ssh-to-age` its public half, replace
+the host recipient in `.sops.yaml`, `sops updatekeys` with the admin key, commit.
+The old host recipient is simply dropped; no need to preserve it.
+
+### Recovery — locked out by a secret that won't decrypt
+
+If no password authenticates, the sops secret didn't decrypt. In order of cost:
+
+1. **Roll back a generation** at the boot menu, if a working one exists. Fastest,
+   and available for every failure *except* a broken first install.
+2. **Install media.** Boot it, unlock and mount the root, then `nixos-enter`.
+   Inside, check whether `/etc/ssh/ssh_host_ed25519_key` exists and whether its
+   `ssh-to-age` output matches the host recipient in `.sops.yaml`. Mismatch is the
+   near-certain cause; fix it by re-keying (steps 5–7) and rebuilding. Note
+   `passwd` is **not** a fix — `mutableUsers = false` discards it on next
+   activation.
 
 ---
 

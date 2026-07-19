@@ -5,7 +5,7 @@
 # auto-brightness (`hardware.sensor.iio`), and the `amdgpu.dcdebugmask=0x10` kernel
 # param. This file adds ONLY what the hardware module doesn't — verify against that
 # module before adding any power/GPU/brightness/fwupd option here (issue #15 note).
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 {
   # --- Boot ---
   # lanzaboote (ADR-0002, #21) replaces systemd-boot. It boots a signed Unified Kernel
@@ -208,13 +208,41 @@
   };
 
   # --- User ---
-  # Real credential handling lands with the sops slice. For now the account is locked
-  # ("!" is not a valid hash, so no password authenticates) — no plaintext in the repo.
+  # The repo is authoritative on account state. With the default `mutableUsers = true`,
+  # NixOS applies a declared password only when it first CREATES the account and leaves it
+  # alone afterwards, so a later `passwd` would silently win and the sops-managed hash
+  # would quietly stop being the truth. Setting this false makes every activation
+  # re-assert what is declared here — which is the premise of this config ("the repo IS
+  # the machine", CONTEXT.md) and is what makes "the password is a sops secret" an
+  # enforced property rather than a first-boot default.
+  #
+  # Consequence, and it is a real one: `passwd` no longer persists across a rebuild. To
+  # change the password you re-encrypt the hash into secrets/users.yaml and rebuild. If
+  # the secret ever fails to decrypt, NO password authenticates and cosmic-greeter (no
+  # autologin, ADR-0005) cannot be passed — recovery is a rollback to a previous NixOS
+  # generation at the boot menu, or a chroot from install media. Both are documented in
+  # docs/hardware-acceptance.md.
+  users.mutableUsers = false;
+
+  # Root has NO password and cannot log in directly ("!" is not a valid hash, so nothing
+  # authenticates against it). Administration goes through drew + wheel + sudo, which the
+  # fingerprint reader already gates (above). Declared explicitly rather than left
+  # implicit because `mutableUsers = false` makes every account's password state a stated
+  # fact, and root's should be stated as "locked" on purpose rather than by omission.
+  users.users.root.hashedPassword = "!";
+
   users.users.drew = {
     isNormalUser = true;
     description = "Drew Williams";
     extraGroups = [ "wheel" "networkmanager" ];
-    hashedPassword = "!"; # placeholder — sops slice replaces this with a real hash
+    # The password is a sops secret (secrets.nix, #18), replacing the locked "!" placeholder
+    # this account carried since #16. `hashedPasswordFile` — not `hashedPassword` — because
+    # the value must never be a literal in this public repo: NixOS reads the HASH out of the
+    # decrypted file at activation, so the repo carries only ciphertext. The secret is marked
+    # `neededForUsers` so it is decrypted before this account is created; `users.mutableUsers
+    # = false` (also secrets.nix) is what makes this the enforced truth rather than a
+    # first-boot default.
+    hashedPasswordFile = config.sops.secrets.drew_password_hash.path;
     # fish is the interactive login shell (CONTEXT.md). bash stays the scripting shell and
     # is always present regardless. drew's *personal* fish config is home-manager's (home.nix).
     shell = pkgs.fish;

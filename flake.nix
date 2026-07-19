@@ -34,13 +34,13 @@
   };
 
   outputs =
-    { nixpkgs, nixos-hardware, disko, home-manager, lanzaboote, ... }:
+    { nixpkgs, nixos-hardware, disko, home-manager, lanzaboote, sops-nix, ... }:
     {
       # Single seam: `nixos-rebuild build --flake .#framework`
       # (== `nix build .#nixosConfigurations.framework.config.system.build.toplevel`).
       # This slice composes the hardware module + disko + home-manager (ADR-0004, #19)
-      # + lanzaboote (signed-UKI custom-key Secure Boot, ADR-0002, #21); sops-nix is
-      # pinned and ready but wired in by its own later slice (#18).
+      # + lanzaboote (signed-UKI custom-key Secure Boot, ADR-0002, #21) + sops-nix
+      # (two-recipient age secrets, #18).
       nixosConfigurations.framework = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
@@ -53,9 +53,14 @@
           # Unified Kernel Image booted under our OWN Secure Boot keys (ADR-0002, #21).
           # The host module (default.nix) enables and configures it.
           lanzaboote.nixosModules.lanzaboote
+          # sops-nix: provides `sops.*`. Secrets are committed encrypted and decrypted at
+          # activation from the host's own SSH key; the admin age key stays off-machine
+          # (#18, CONTEXT.md). The host module (secrets.nix) configures the recipients.
+          sops-nix.nixosModules.sops
           ./hosts/framework/disko.nix
           ./hosts/framework/default.nix
           ./hosts/framework/home.nix
+          ./hosts/framework/secrets.nix
         ];
       };
     };
