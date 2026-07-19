@@ -1,0 +1,20 @@
+# Override global gitignore (~/.gitignore_global) for this repo.
+# The global config ignores agent-skill scaffolding so it doesn't get committed
+# by default; here we want it tracked. Negations re-include those paths.
+
+# Top-level scaffolding files
+!CLAUDE.md
+!AGENTS.md
+!CONTEXT.md
+!CONTEXT-MAP.md
+
+# Scaffolding directories (re-include the dir, then its contents)
+!docs/agents/
+!docs/agents/**
+!docs/adr/
+!docs/adr/**
+!.scratch/
+!.scratch/**
+
+# Scaffolding scripts
+!scripts/issues-map.sh
