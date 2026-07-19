@@ -1,0 +1,16 @@
+# git SSH commit-signing trusted signers (gpg.ssh.allowedSignersFile, #19).
+#
+# Non-secret: these are PUBLIC keys, safe to commit. This file lets
+# `git log --show-signature` verify locally without contacting GitHub.
+#
+# Format (one signer per line):  <principal> <keytype> <base64-key>
+#   e.g.  williams.r.drew@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+#
+# The signing key is generated on first boot (host-key-style, see home.nix), so its
+# public half is not known until then. FILL THIS IN during the #24 bootstrap ritual:
+#   1. cat ~/.ssh/id_ed25519_signing.pub
+#   2. paste it below as `williams.r.drew@gmail.com <that line>`
+#   3. upload the SAME public half to GitHub as a *Signing* key
+#   4. commit this file
+#
+# Until filled, signatures verify as unverified locally — expected, not a bug.

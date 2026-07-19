@@ -58,7 +58,16 @@
     description = "Drew Williams";
     extraGroups = [ "wheel" "networkmanager" ];
     hashedPassword = "!"; # placeholder — sops slice replaces this with a real hash
+    # fish is the interactive login shell (CONTEXT.md). bash stays the scripting shell and
+    # is always present regardless. drew's *personal* fish config is home-manager's (home.nix).
+    shell = pkgs.fish;
   };
+
+  # System-level: puts fish in /etc/shells (so it is a valid login shell) and wires vendor
+  # completions — the "fish exists on this machine" half (a second user could use it, so it
+  # is a system concern). Sits here beside the login-shell assignment so all system-level
+  # fish wiring is in one place.
+  programs.fish.enable = true;
 
   # Load-bearing minimum for a from-repo rebuild workflow; broader package curation
   # is deliberately deferred (issue #15 out-of-scope).
