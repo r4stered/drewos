@@ -86,6 +86,56 @@
   networking.hostName = "framework";
   networking.networkmanager.enable = true;
 
+  # --- Desktop (COSMIC) ---
+  # COSMIC over GNOME (ADR-0005): a minimal, trackpad-first desktop whose tiling is a
+  # per-workspace toggle (Super+Y) with per-window float (Super+G) and which stays
+  # MOUSE-FIRST even while tiling (drag tiles/borders, right-click title bars). That lets
+  # Drew build tiling/vim fluency without ever losing the trackpad as the primary way to
+  # move between windows — the "learn on tiling but never keyboard-only" requirement.
+  # GNOME was rejected because its only real tiling (Pop Shell) is unmaintained by System76
+  # and broken on the GNOME 48 that 26.05 ships. COSMIC is a first-class module on 26.05.
+  services.desktopManager.cosmic.enable = true;
+
+  # cosmic-greeter is the login screen. Deliberately NO autologin — we set no
+  # services.displayManager.*.autoLogin. A greeter login is required at every boot as
+  # defence-in-depth AFTER the LUKS PIN, and the login password auto-unlocks the COSMIC
+  # keyring (ADR-0005). Autologin was rejected: it saves one prompt per boot but breaks
+  # keyring auto-unlock and is flaky through cosmic-greeter on 26.05.
+  services.displayManager.cosmic-greeter.enable = true;
+
+  # NOTE (declarative boundary): COSMIC's tiling/keybind/float defaults and the ~5-minute
+  # idle blank+lock are per-SESSION settings (COSMIC's own config under the user profile),
+  # NOT NixOS options, so they cannot be pinned from this file. Mouse-first tiling is
+  # COSMIC's native default, so no override is needed to satisfy "never keyboard-only".
+  # The idle->poweroff at ~20 min IS enforced declaratively below (Power); the ~5-min
+  # blank+lock is left as a session/hardware-checklist item (#24).
+
+  # --- Fingerprint auth (fprintd) ---
+  # Genuine opt-in: the framework-13-7040-amd hardware module does NOT set
+  # services.fprintd (verified upstream), so nothing here duplicates it. The Framework's
+  # Goodix Match-on-Chip sensor is supported by the IN-TREE libfprint, so we do NOT enable
+  # services.fprintd.tod — the Touch OEM Driver path is for readers that need an
+  # out-of-tree blob, which this one doesn't. Committed UNCONDITIONALLY (not gated on
+  # hardware detection); actual enrolment is verified on-hardware in checklist #24.
+  # Scope is deliberately narrow: this is login + sudo convenience only. It is NOT commit
+  # signing (#19) and NOT LUKS unlock (#5) — the disk is still unlocked by the TPM+PIN.
+  services.fprintd.enable = true;
+
+  # Add the fingerprint reader as an ADDITIONAL auth method on exactly the four PAM stacks
+  # that matter for login + sudo. fprintAuth is additive: it sits alongside the existing
+  # unix/password auth, so PASSWORD FALLBACK IS RETAINED on all four — a failed, slow, or
+  # unenrolled fingerprint always falls through to the password and can never lock Drew
+  # out. (nixpkgs defaults fprintAuth to services.fprintd.enable, but we pin these four
+  # explicitly to document the intended scope rather than rely on the global default.)
+  #   - cosmic-greeter: the graphical login (PAM entry created by the COSMIC module above)
+  #   - sudo:           fingerprint instead of retyping the password for privilege escalation
+  #   - polkit-1:       GUI privilege prompts (COSMIC settings, mounting, etc.)
+  #   - login:          the TTY/console login fallback
+  security.pam.services.cosmic-greeter.fprintAuth = true;
+  security.pam.services.sudo.fprintAuth = true;
+  security.pam.services.polkit-1.fprintAuth = true;
+  security.pam.services.login.fprintAuth = true;
+
   # --- Power ---
   # power-profiles-daemon is enabled by the framework-13-7040-amd module; we rely on it
   # and NEVER enable tlp (running both fights over the same knobs on AMD Framework).
@@ -93,6 +143,50 @@
   # `hardware.framework.amd-7040.preventWakeOnAC` is left unset: the AC-plug-wakes-from-
   # suspend quirk is already fixed upstream in Linux >=6.7, and we run linuxPackages_latest,
   # so enabling it would only cost keyboard-wake for no benefit. Don't "fix" this. (#12)
+  #
+  # Everything below here is COLD-BOOT ENFORCEMENT (ADR-0005 / ADR-0003 / CONTEXT.md), NOT
+  # comfort tuning. The posture is "the LUKS master key must never sit in POWERED RAM while
+  # the laptop is out of Drew's hands", and a security property is enforced by making the
+  # bad state structurally unreachable — hence the sleep masking and idle/button poweroffs.
+
+  # Hard-mask every sleep pathway. Keys survive in powered RAM across a suspend, so a
+  # suspended laptop is a cold-boot/DMA target — ADR-0003 therefore treats "no suspend, no
+  # hibernation" as a security property. Disabling all four systemd sleep targets makes
+  # suspend/hibernate IMPOSSIBLE system-wide: no menu item, keybind, lid action, or package
+  # can reach a state that leaves keys in RAM. This is the structural guarantee ADR-0005
+  # demands over a "soft" no-suspend (which would leave suspend.target reachable, and thus
+  # bypassable by a stray keybind or package).
+  systemd.targets.sleep.enable = false;
+  systemd.targets.suspend.enable = false;
+  systemd.targets.hibernate.enable = false;
+  systemd.targets.hybridSleep.enable = false;
+
+  # logind power-button / lid / idle behaviour, all as cold-boot enforcement. Written in
+  # the settings.Login.* freeform form because that is the NON-deprecated shape on 26.05:
+  # services.logind.powerKey / lidSwitch are renamed aliases and .extraConfig is removed,
+  # so this keeps eval free of deprecation warnings and puts all logind config in one place.
+  services.logind.settings.Login = {
+    # Power button -> clean poweroff. The deliberate "keys out of RAM NOW" control: one
+    # press returns the machine to a COLD (powered-off) state on demand.
+    HandlePowerKey = "poweroff";
+
+    # Lid close -> lock + screen off, but KEEP RUNNING. Chosen for instant resume; this
+    # machine is never used clamshell/docked. This is the one accepted hole in the posture
+    # (a laptop bagged while running still holds the key in RAM), closed on a delay by the
+    # idle->poweroff timer below — its compensating control.
+    HandleLidSwitch = "lock";
+
+    # Idle -> poweroff, the compensating control for lid=lock: it automatically returns the
+    # machine to a COLD state when Drew walks away or bags it while it is still running, so
+    # the key cannot linger in RAM indefinitely. logind idle is INPUT-idle, so a silent
+    # unattended long job (a big nixos-rebuild, a download) is also powered off at the
+    # timeout unless the machine is kept awake — an accepted consequence (ADR-0005).
+    # (The ~5-min blank+lock that precedes this is a COSMIC session setting, not a logind
+    # option — see the Desktop NOTE above; logind's single IdleAction can only do one of
+    # lock/poweroff, so we spend it on the security-critical poweroff.)
+    IdleAction = "poweroff";
+    IdleActionSec = "20min";
+  };
 
   # --- Swap ---
   # zram-only swap: a compressed RAM block device, NO disk swapfile and NO
