@@ -6,6 +6,24 @@ version of it, a reinstall points the installer back at it.
 
 ## Language
 
+**Interactive shell / Scripting shell**:
+Two shells with two jobs. The **interactive shell** is **fish** — the daily driver at
+the prompt (aliases, history, completions). The **scripting shell** is **bash** — kept
+for POSIX scripts and anything that expects `sh` semantics, because fish's non-POSIX
+syntax breaks copy-pasted snippets. The prompt (starship) is cross-shell, so it renders
+identically whether you're in fish or dropped into bash.
+_Avoid_: "the shell" said bare — fish and bash have distinct, non-overlapping roles.
+
+**Package homes**:
+The three places a package can live, and the rule for which. **System config**
+(`environment.systemPackages`) owns what makes the machine *be the machine* — kernel,
+drivers, services, the desktop stack, universal CLI. **Home config** (`home.packages`,
+under home-manager) owns your personal userland — CLI tools, TUIs, user apps. A
+**dev shell** (`nix develop`) owns per-project toolchains (compilers, language servers,
+SDKs) and is never global (see [ADR-0001](docs/adr/0001-stable-channel-opt-into-latest-tooling.md)).
+Tie-break when unsure: *would a second user on this laptop need it?* Yes → system, no → home.
+_Avoid_: "install it" said bare — always say *which* home.
+
 **Channel**:
 The nixpkgs release track the config follows. `nixos-26.05` (stable) is a fixed,
 six-month release; `nixos-unstable` is rolling. This repo tracks **stable**.
