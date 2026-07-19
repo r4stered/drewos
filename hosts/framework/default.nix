@@ -106,6 +106,18 @@
   networking.hostName = "framework";
   networking.networkmanager.enable = true;
 
+  # --- Locale ---
+  # Santa Cruz, CA. Set explicitly because the NixOS default is UTC, and this repo has
+  # no hardware-configuration.nix to carry it — the same gap that hid the firmware
+  # option above. Pinned to a zone rather than left to geoclue/automatic detection:
+  # the repo is authoritative on machine state (CONTEXT.md), and a timezone that
+  # silently follows the network is the kind of thing that makes log timestamps and
+  # snapper's timeline snapshots ambiguous after travel.
+  #
+  # DST is handled by the tzdata rules behind the zone name, so this needs no seasonal
+  # edit — "America/Los_Angeles" means Pacific *with* its DST rules, never a fixed -08.
+  time.timeZone = "America/Los_Angeles";
+
   # --- Desktop (COSMIC) ---
   # COSMIC over GNOME (ADR-0005): a minimal, trackpad-first desktop whose tiling is a
   # per-workspace toggle (Super+Y) with per-window float (Super+G) and which stays
