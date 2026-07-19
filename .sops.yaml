@@ -52,4 +52,4 @@ creation_rules:
           # Until that is done, secrets decrypt from the password manager only — which is
           # exactly the correct state before there is a laptop to decrypt on. The build
           # warns while this is outstanding (hosts/framework/secrets.nix).
-          # - age1REPLACE_WITH_HOST_KEY_AT_INSTALL
+          - age1pc6yvz5e7yp6alx68jzp04txs8e0qnm62scndt7jfj8n4fkzdgqscle7rn
