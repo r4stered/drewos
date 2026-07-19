@@ -79,6 +79,30 @@ _Avoid_: conflating with the **Secure Boot signing key** — that one is preciou
 sops-committed, and signs boot images; this one is throwaway, uncommitted, and
 signs commits. Also not an *auth* key (it does not push).
 
+**Declarative boundary**:
+The line between what this repo *declares* and what is configured by hand on the running
+machine. It is a per-thing choice, not a limitation. Some things sit past the boundary
+because NixOS exposes no options for them (COSMIC's own session settings — tiling
+defaults, keybinds, the idle blank+lock). Others sit past it *deliberately*, because
+iterating on them daily is worth more than reproducing them (nvim, VS Code, and Firefox
+config — [ADR-0006](docs/adr/0006-applications-declared-configuration-mutable.md)). The
+operational meaning is blunt: **a reinstall restores everything inside the boundary and
+nothing outside it.** The related rule from ADR-0006 is to prefer applications that
+*could* be declared and then decline to declare them yet — leaving a thing undeclared is
+reversible, picking one that can never be declared is not.
+_Avoid_: "not configured" for something past the boundary — it is configured, just not by
+this repo; "can't be declared" when the truth is *isn't yet*.
+
+**Rescue editor / Daily editor**:
+Two editors with two jobs, mirroring the fish/bash split. The **rescue editor** is `vim`
+in `environment.systemPackages` — present for root, for a second user, and critically when
+home-manager activation has *failed* and the personal userland does not exist. The **daily
+editor** is `nvim` under home-manager: a personal tool that may legitimately be
+half-configured or broken. `vim` is never aliased to `nvim` (`viAlias` yes, `vimAlias` no),
+so typing `vim` always reaches the editor guaranteed to work — which is the entire point
+when you are root at a broken boot.
+_Avoid_: "the editor" said bare — say *rescue* or *daily*.
+
 **Cold-boot posture**:
 The whole-machine stance that the LUKS master key must never sit in *powered* RAM
 while the laptop is out of the user's hands — the reason there is no suspend or

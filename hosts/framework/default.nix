@@ -5,7 +5,7 @@
 # auto-brightness (`hardware.sensor.iio`), and the `amdgpu.dcdebugmask=0x10` kernel
 # param. This file adds ONLY what the hardware module doesn't — verify against that
 # module before adding any power/GPU/brightness/fwupd option here (issue #15 note).
-{ config, pkgs, ... }:
+{ config, pkgs, lib, ... }:
 {
   # --- Boot ---
   # lanzaboote (ADR-0002, #21) replaces systemd-boot. It boots a signed Unified Kernel
@@ -117,6 +117,41 @@
   # DST is handled by the tzdata rules behind the zone name, so this needs no seasonal
   # edit — "America/Los_Angeles" means Pacific *with* its DST rules, never a fixed -08.
   time.timeZone = "America/Los_Angeles";
+
+  # --- Time sync ---
+  # NOTHING here turns on anything that was off. Both lines pin an existing default and
+  # record why it is load-bearing, because both are easy to break silently later.
+  #
+  # Verified by eval before this block existed: services.timesyncd.enable was ALREADY
+  # true (nixpkgs defaults it to `!boot.isContainer`) with services.ntp and
+  # services.chrony both false — the machine already speaks NTP. `servers` is left null
+  # deliberately: null omits `NTP=` from timesyncd.conf and leaves only `FallbackNTP=`
+  # (networking.timeServers, the nixos pool), so a network-supplied NTP server wins when
+  # there is one and the pool is merely the backstop. Pinning `servers` would override
+  # that — the wrong trade for a laptop that roams between networks.
+  services.timesyncd.enable = true;
+
+  # This `false` is what makes the BIOS/RTC clock track the OS. It is NOT just a
+  # regional preference, and it is the ONLY thing standing between this machine and a
+  # hardware clock that is never updated at all.
+  #
+  # systemd-timesyncd never writes the RTC itself. On a successful sync it calls
+  # clock_adjtime with ADJ_STATUS and a status word that leaves STA_UNSYNC UNSET, which
+  # switches on the kernel's "11-minute mode" — from then on the KERNEL copies system
+  # time into the RTC every 11 minutes. timesyncd sets STA_UNSYNC, killing that mode and
+  # with it all RTC writeback, in exactly one case: when the RTC is in local time, since
+  # it cannot reason about DST or a machine that changes time zone. (Upstream states this
+  # outright in src/timesync/timesyncd-manager.c.) So flipping this to `true` would
+  # silently stop the hardware clock from ever being updated. Only a Windows dual-boot
+  # would tempt it, and this disk has no Windows (disko.nix) — don't flip it.
+  #
+  # This matters more on THIS machine than on most laptops. The cold-boot posture
+  # (ADR-0005) powers the laptop off at the power button, on the 20-minute idle timer,
+  # and never suspends — so the RTC, not a long-running session, is what carries time
+  # across a great many cold boots. A drifted RTC means every boot starts with a wrong
+  # clock, which breaks TLS certificate validity before timesyncd has a chance to correct
+  # it — on a config whose whole recovery story is "rebuild yourself from the network".
+  time.hardwareClockInLocalTime = false;
 
   # --- Desktop (COSMIC) ---
   # COSMIC over GNOME (ADR-0005): a minimal, trackpad-first desktop whose tiling is a
@@ -286,8 +321,80 @@
   # fish wiring is in one place.
   programs.fish.enable = true;
 
-  # Load-bearing minimum for a from-repo rebuild workflow; broader package curation
-  # is deliberately deferred (issue #15 out-of-scope).
+  # --- Unfree: a named allowlist, NOT a blanket flag ---
+  # DO NOT "simplify" this to `nixpkgs.config.allowUnfree = true`. The predicate form is
+  # the point: it names every unfree package individually, so adding one is a reviewed
+  # line in a diff rather than an invisible event. With the blanket flag, an unfree
+  # package — including one pulled in TRANSITIVELY by some dependency you did not choose —
+  # installs silently and this repo quietly stops being auditable.
+  #
+  # This preserves the property the `enableRedistributableFirmware` comment above depends
+  # on: unfree code is present only where a human wrote its name down. The cost is one
+  # line per unfree app, paid at most a few times a year. Adding an unfree package without
+  # editing this list produces a BUILD FAILURE naming the package — that failure is the
+  # feature, not an obstacle.
+  #
+  # `lib.getName` yields the pname (e.g. "vscode"), so match pnames here, not derivation
+  # names with versions attached.
+  nixpkgs.config.allowUnfreePredicate =
+    pkg: builtins.elem (lib.getName pkg) [
+      "vscode"
+      "spotify"
+    ];
+
+  # --- Fonts ---
+  # System-level, not home-manager: fonts must exist for the cosmic-greeter login screen
+  # (which renders BEFORE any user session, so a home profile cannot supply them) and for
+  # any second user. This is the "would a second user need it?" tie-break from CONTEXT.md
+  # landing squarely on system.
+  #
+  # ONLY the monospace font is added. Verified against the existing closure before writing
+  # this: COSMIC already pulls in noto-fonts, noto-fonts-cjk-{sans,serif},
+  # noto-fonts-color-emoji, dejavu, liberation, open-sans and more (11 packages). Colour
+  # emoji and CJK are therefore ALREADY handled — do not re-add them here.
+  #
+  # The fully-patched Nerd Font is deliberate over the alternative (upstream JetBrains Mono
+  # + nerd-fonts.symbols-only as a fontconfig fallback). Symbols-only is tidier in theory —
+  # one symbol font serving every family, upstream metrics untouched — but it depends on
+  # fontconfig fallback resolving in every single app, and when it doesn't the failure mode
+  # is silent tofu boxes in one app only. The patched font puts the glyphs in the file, so
+  # they are either there or not. Costs disk, buys certainty.
+  fonts.packages = [ pkgs.nerd-fonts.jetbrains-mono ];
+
+  # --- Dynamic linker shim for foreign binaries (nix-ld) ---
+  # LOAD-BEARING FOR VS CODE (ADR-0006). VS Code extensions download PREBUILT binaries at
+  # runtime — language servers, formatters, debug adapters (Pylance, ESLint, rust-analyzer,
+  # debugpy). Those are ordinary dynamically-linked ELF executables that expect
+  # /lib64/ld-linux-x86-64.so.2, a path that DOES NOT EXIST on NixOS. Without this they die
+  # with `cannot execute: required file not found`, which names neither the real cause nor
+  # the fix, and the extension merely appears broken.
+  #
+  # ADR-0006 chose to leave VS Code's extensions mutable and installed in-app. That choice
+  # is only viable because of this option — the two are a package. If this is ever removed,
+  # ADR-0006 has to be revisited, not just this line.
+  programs.nix-ld.enable = true;
+
+  # --- Printing (CUPS + mDNS autodiscovery) ---
+  # avahi is what makes this useful rather than merely present: without mDNS you must know
+  # a printer's IP address, and modern home/office printers advertise themselves instead of
+  # carrying a documented static one. nssmdns4 wires .local name resolution into NSS; the
+  # firewall hole is UDP 5353 (mDNS) only.
+  services.printing.enable = true;
+  services.avahi = {
+    enable = true;
+    nssmdns4 = true;
+    openFirewall = true;
+  };
+
+  # System packages: the load-bearing minimum for a from-repo rebuild workflow. Personal
+  # userland (CLI tools, TUIs, GUI apps) lives in home-manager instead — see home.nix and
+  # the "Package homes" rule in CONTEXT.md.
+  #
+  # `vim` here is the RESCUE EDITOR (CONTEXT.md), not a leftover: it is the editor present
+  # for root, for a second user, and — the case that matters — when home-manager activation
+  # has FAILED and drew's personal userland (including nvim) does not exist. It is
+  # deliberately never aliased to nvim, so `vim` always reaches the editor guaranteed to
+  # work. Do not remove it when adding a daily editor; they are not redundant.
   environment.systemPackages = with pkgs; [
     git
     vim

@@ -6,8 +6,16 @@
 # generation. `useGlobalPkgs` = share the system's nixpkgs (one channel, no drift);
 # `useUserPackages` = user packages install as part of system activation.
 #
-# Initial scope is git + shell + prompt ONLY. A terminal emulator and the rest of the
-# desktop userland are deferred until COSMIC is proven on hardware (#20).
+# Scope now covers the daily-driver userland: terminal, editors, browser, music, and the
+# CLI tooling that makes NixOS itself pleasant. The earlier "deferred until COSMIC is
+# proven on hardware (#20)" note is discharged.
+#
+# Application CONFIG is deliberately NOT declared here — only which applications exist.
+# nvim ships with no plugins, VS Code's extensions are installed by clicking, Firefox's
+# profile is whatever Firefox writes. That is a recorded decision with a rationale and
+# consequences, not an omission: see ADR-0006, and the "Declarative boundary" entry in
+# CONTEXT.md. The rule it follows is to prefer apps that COULD be declared, then decline
+# to declare them yet — so every app below has an unused home-manager module waiting.
 #
 # Three package homes (CONTEXT.md): personal userland lives here under home-manager, NOT in
 # `environment.systemPackages`. `programs.*.enable` below pull fish/bash/starship/git into
@@ -34,6 +42,77 @@
       programs.fish.enable = true;
       programs.bash.enable = true;
       programs.starship.enable = true;
+
+      # --- Terminal emulator (ghostty) ---
+      # Chosen over Alacritty/foot because those have NO native tabs or splits, which
+      # forces tmux for multiplexing — and tmux is pure keyboard. That would quietly
+      # reintroduce exactly what ADR-0005 picked COSMIC to avoid ("tiling to learn on,
+      # never keyboard-only"). ghostty's tabs and splits are mouse-driven, so the trackpad
+      # stays a first-class way to move around.
+      #
+      # Chosen over cosmic-term (which COSMIC already ships) because cosmic-term has no
+      # home-manager module: its font and theme could only ever be set by clicking, putting
+      # the daily terminal permanently outside the declarative boundary. ghostty's config
+      # is left mutable TODAY, but the module exists, so it can be pulled into this repo
+      # whenever it stops changing. Option preserved, not exercised (ADR-0006).
+      #
+      # Safe to live in home rather than system: cosmic-term IS in the system closure, so a
+      # failed home-manager activation still leaves a working terminal to repair it from.
+      programs.ghostty = {
+        enable = true;
+        settings = {
+          # Must match the family name of the patched font added in default.nix.
+          font-family = "JetBrainsMono Nerd Font";
+          font-size = 13;
+        };
+      };
+
+      # --- Editors ---
+      # The DAILY editor (CONTEXT.md). Plain nvim: no plugins, no lua config, by choice —
+      # plugin management is deferred until taste exists to encode (ADR-0006).
+      #
+      # viAlias but deliberately NOT vimAlias: `vim` must keep resolving to the system
+      # RESCUE editor, the one that still exists when this home profile has failed to
+      # activate. Turning on vimAlias would shadow it in drew's PATH and make the two
+      # indistinguishable by name — precisely when telling them apart matters most.
+      programs.neovim = {
+        enable = true;
+        defaultEditor = true;
+        viAlias = true;
+        vimAlias = false;
+      };
+
+      # The get-work-done escape hatch — reached for when nvim is costing more time than it
+      # is teaching. Extensions and settings stay mutable and in-app ON PURPOSE: an escape
+      # hatch that needs a `nixos-rebuild` to install an extension is not an escape hatch.
+      # This only works because of `programs.nix-ld.enable` in default.nix — see ADR-0006.
+      # Unfree; named in the allowlist in default.nix.
+      programs.vscode.enable = true;
+
+      # Browser. Profile, extensions and settings left mutable (ADR-0006); the
+      # programs.firefox module is available to take them over later.
+      programs.firefox.enable = true;
+
+      # --- Development environment plumbing ---
+      # direnv is what makes the third package home from CONTEXT.md ("dev shell") actually
+      # usable. Without it, a per-project toolchain means typing `nix develop` on every cd
+      # and losing it in every new terminal tab — so the documented rule "per-project
+      # toolchains, never global" would quietly lose to just installing things globally.
+      # nix-direnv adds caching and GC-root pinning, turning a multi-second stall on every
+      # directory change into something instant. The fish hook is wired automatically.
+      programs.direnv = {
+        enable = true;
+        nix-direnv.enable = true;
+      };
+
+      # Fixes NixOS's least helpful moment. By default a missing command produces a bare
+      # `command not found`, because there is no global bin directory to scan for a
+      # suggestion. nix-index builds that database, so the shell can answer "that's in
+      # ripgrep". enableFishIntegration installs the fish command-not-found handler.
+      programs.nix-index = {
+        enable = true;
+        enableFishIntegration = true;
+      };
 
       # --- Git + SSH commit signing (decision #14 / ADR-0004) ---
       # Sign every commit and annotated tag with a dedicated on-machine SSH key. The key is
@@ -62,6 +141,38 @@
       # The pubkey line is filled in during the first-boot bootstrap ritual (#24); until then
       # this is a comment-only placeholder and signatures read as unverified — expected.
       home.file.".config/git/allowed_signers".source = ./allowed_signers;
+
+      # --- Personal userland packages ---
+      # Everything here answers "no" to CONTEXT.md's tie-break (would a second user on this
+      # laptop need it?), so it lives in home rather than environment.systemPackages.
+      #
+      # The CLI list was checked against the existing 208-package system closure before
+      # being written — every one of these was genuinely absent (only `curl` was already
+      # present, which is why it is not repeated here). No GUI file manager, text editor or
+      # media player either: COSMIC already ships cosmic-files, cosmic-edit and
+      # cosmic-player.
+      home.packages = with pkgs; [
+        # Music. Unfree; named in the allowlist in default.nix. Audio needs nothing extra —
+        # the COSMIC module already enables pipewire (with pulse + alsa) and rtkit.
+        spotify
+
+        # `,` — runs a program once from nixpkgs without installing it (`, rg foo`). Pairs
+        # with programs.nix-index above: nix-index tells you which package has the command,
+        # comma lets you just use it without committing it to this file.
+        comma
+
+        # Shell basics.
+        ripgrep # rg — fast recursive grep
+        fd # friendlier find
+        bat # cat with syntax highlighting
+        eza # modern ls
+        jq # JSON slicing
+        btop # process/resource monitor
+        tree
+        file
+        unzip
+        wget
+      ];
 
       # --- Commit signing key: generated on first boot, host-key-style ---
       # Disposable, no sops ceremony (CONTEXT.md "Commit signing key"): if lost, regenerate and
