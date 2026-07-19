@@ -43,12 +43,18 @@ silent, expensive, or both.
    Secure Boot still **off**. So the first boot happens with SB off, and key
    enrollment (which needs BIOS Setup Mode) happens afterwards, from a system you
    have actually seen come up.
-4. **PCR 7 measures the *final* Secure Boot state.** So the LUKS TPM keyslot is
-   enrolled **last** — after keys are enrolled, after SB is switched on, and after
-   any firmware update. Enroll it earlier and it binds to a PCR 7 that is about to
-   change, and the TPM unlock breaks on the next reboot.
+4. **Firmware updates rewrite NVRAM.** A BIOS update can touch the Secure Boot key
+   databases and SB configuration, so it runs **before** `sbctl enroll-keys` —
+   while SB is still off and there is nothing enrolled to lose. Doing it after
+   risks clobbering the enrolled keys. It also cannot be done from the live ISO
+   (see C3), so it belongs to first boot, not the installer.
+5. **PCR 7 measures the *final* Secure Boot state.** So the LUKS TPM keyslot is
+   enrolled **last** — after the firmware update, after keys are enrolled, and
+   after SB is switched on. Enroll it earlier and it binds to a PCR 7 that is about
+   to change, and the TPM unlock breaks on the next reboot.
 
-The one-line version: **keys before install, boot before enroll, TPM last.**
+The one-line version: **keys before install, boot before enroll, firmware before
+keys, TPM last.**
 
 ---
 
@@ -103,8 +109,8 @@ local file.
 - [ ] **Firmware/config merged to `main`** — the install pulls the default branch
 - [ ] **LUKS fallbacks:** passphrase keyslot *and* recovery key both in the password manager, enrolled in the installer
 - [ ] **Secrets (sops):** host key generated *before* the first install, both recipients in `.sops.yaml`, secrets decrypt at activation, no plaintext in the repo
+- [ ] **BIOS firmware ≥ 3.05** confirmed and updated *before* Secure Boot enrollment (fingerprint reader depends on it)
 - [ ] **Secure Boot:** sbctl bundle created *before* install; our keys enrolled (no `--microsoft`), SB ON in BIOS, signed UKI boots
-- [ ] **BIOS firmware ≥ 3.05** confirmed (fingerprint reader depends on it)
 - [ ] **LUKS TPM+PIN:** enrolled to PCR 7 + PIN **last**, unlocks at boot
 - [ ] **Fingerprint:** `lsusb` shows `27c6:609c`, firmware current, `fprintd-enroll` succeeds
 - [ ] **Fingerprint gating:** cosmic-greeter login and `sudo` accept a finger; password fallback still works
@@ -307,21 +313,42 @@ or the COSMIC applet) and confirm it survives a reboot. This also implicitly
 confirms the MT7922 firmware landed — the `hardware.enableRedistributableFirmware`
 fix in `default.nix`. If Wi-Fi is dead here, that is the first thing to check.
 
-**C3. Enroll Secure Boot keys and turn SB on.** Detail in the *Secure Boot* section
-below. Summary: BIOS → Setup Mode, `sudo sbctl enroll-keys` (no `--microsoft`),
-`sudo sbctl verify`, BIOS → Secure Boot ON, reboot, confirm with `bootctl status`.
+**C3. Update firmware — before Secure Boot enrollment, and long before the TPM.**
+Two separate reasons, and the ordering satisfies both:
 
-**C4. Update firmware — before the TPM, not after.** Firmware updates shift PCR 7,
-so doing this after TPM enrollment would immediately invalidate the keyslot. Also
-needed to get the fingerprint reader to ≥ 3.05:
+- A firmware update is the operation most likely to touch **NVRAM**, including the
+  Secure Boot key databases and SB configuration. Running it *after* `sbctl
+  enroll-keys` risks clobbering the enrolled keys and sending you back through
+  enrollment. Right now Secure Boot is still off and there is nothing to lose.
+- Firmware updates shift **PCR 7**, so this must also precede TPM enrollment or the
+  keyslot is invalidated the moment it is created.
+
+It is also the prerequisite for the fingerprint reader (≥ 3.05).
 
 ```
 fwupdmgr refresh && fwupdmgr get-updates
 systemd-inhibit --what=idle:shutdown --why="fwupd flash" fwupdmgr update
 ```
 
-**C5. Enroll the LUKS TPM keyslot — last.** PCR 7 is only settled now that keys are
-enrolled, SB is on, and firmware is current. Detail in the *LUKS* section below.
+The inhibitor is not optional here: an idle poweroff part-way through a firmware
+flash is a bricking scenario, not an inconvenience.
+
+> **This cannot be done from the live ISO.** The graphical 26.05 installer does not
+> enable `services.fwupd`, ships no `fwupd` binary, and defines no `fwupd.service`
+> (verified by eval), so `fwupdmgr` has no daemon to talk to. Beyond that, a BIOS
+> update is a **UEFI capsule**: fwupd stages a capsule file on the ESP and sets an
+> EFI variable for the firmware to apply on next boot. In the installer there is no
+> ESP mounted — and staging one before disko would just be destroyed when disko
+> formats the partition. The Goodix fingerprint reader is the exception (a direct
+> USB write via fwupd's `goodixmoc` plugin, no capsule, no ESP), but there is no
+> reason to do it early since enrollment happens on the installed system anyway.
+
+**C4. Enroll Secure Boot keys and turn SB on.** Detail in the *Secure Boot* section
+below. Summary: BIOS → Setup Mode, `sudo sbctl enroll-keys` (no `--microsoft`),
+`sudo sbctl verify`, BIOS → Secure Boot ON, reboot, confirm with `bootctl status`.
+
+**C5. Enroll the LUKS TPM keyslot — last.** PCR 7 is only settled now that firmware
+is current, keys are enrolled, and SB is on. Detail in the *LUKS* section below.
 
 **C6. Enroll a finger.** Detail in the *Fingerprint* section below.
 
@@ -384,7 +411,7 @@ via the TPM sealed to **PCR 7** **and** a **PIN**. The PIN is load-bearing: the
 TPM authenticates the *platform, not the person*, so TPM-only would let a stolen,
 powered-off laptop decrypt itself. TPM anti-hammering lets the PIN stay short.
 
-**Do this only after Secure Boot is enrolled, SB is ON, and firmware is current**
+**Do this only after firmware is current, Secure Boot is enrolled, and SB is ON**
 (Phase C, steps C3–C4). PCR 7 encodes the Secure Boot state; enrolling against a
 PCR 7 that is about to change just guarantees a broken keyslot.
 
@@ -435,7 +462,7 @@ them:
    ```
    `27c6:609c` is the Framework 13 / Goodix reader. No match → wrong port/model
    or a firmware issue; stop here.
-2. **Firmware ≥ 3.05** — already handled in C4. Confirm the reported reader
+2. **Firmware ≥ 3.05** — already handled in C3. Confirm the reported reader
    firmware is **≥ 3.05** with `fwupdmgr get-devices` before enrolling.
 3. **Enroll a finger:**
    ```
@@ -570,8 +597,10 @@ checks the dry-build can't reach.
 ### BIOS firmware ≥ 3.05
 
 - [ ] Confirm the **BIOS/firmware is ≥ 3.05** (`fwupdmgr get-devices`, or the BIOS
-      screen). Prerequisite for the fingerprint reader. Handled in C4 —
-      **before** the TPM enrollment, because a firmware update shifts PCR 7.
+      screen). Prerequisite for the fingerprint reader. Handled in C3 — **before**
+      Secure Boot enrollment (a firmware update can clobber enrolled keys in NVRAM)
+      and therefore well before the TPM enrollment (it shifts PCR 7). Not doable
+      from the live ISO; see the note at C3.
 
 ### Brightness keys (kernel sanity check)
 
