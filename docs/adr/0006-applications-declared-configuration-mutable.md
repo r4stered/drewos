@@ -61,8 +61,9 @@ Not declaring is reversible. Choosing an app that cannot be declared is not.
 
 - **A reinstall does not restore editor or browser state.** Extensions, keybinds, and
   Firefox profile are lost and re-created by hand. This is accepted; none of it is
-  precious, and none of it is a secret (contrast the Secure Boot signing key, which *is*
-  declared and sops-encrypted precisely because it cannot be re-created).
+  precious, and none of it is a secret. It is also cheap to re-create, which is the real
+  test — contrast the Secure Boot signing key, whose loss costs a BIOS-level re-enroll
+  (CONTEXT.md).
 - **`programs.nix-ld` becomes load-bearing.** Mutable VS Code means extensions fetch
   prebuilt binaries at runtime, linked against `/lib64/ld-linux-x86-64.so.2` — a path that
   does not exist on NixOS. Without nix-ld those extensions fail with `cannot execute:

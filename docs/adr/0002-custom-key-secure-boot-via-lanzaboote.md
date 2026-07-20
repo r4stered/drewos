@@ -14,9 +14,16 @@ isn't confused about why the "settled" bootloader changed.
 We enroll **our own keys only** (`sbctl`-generated PK/KEK/db) with **no shim and no
 Microsoft keys**. Because the kernel command line is embedded in the signed UKI,
 systemd-stub ignores any injected cmdline while Secure Boot is on — closing the
-classic `init=/bin/sh` and evil-maid-initrd attacks. The Secure Boot signing
-private key is stored as a **sops-nix secret** (committed encrypted, decrypted only
-on the unlocked machine); lanzaboote's key paths point at the sops secret path.
+classic `init=/bin/sh` and evil-maid-initrd attacks.
+
+**Where the Secure Boot signing key lives (as built).** `boot.lanzaboote.pkiBundle` points at
+`/var/lib/sbctl` — an on-device bundle created by hand in the installer, on the
+LUKS-encrypted root. It is **not** committed and **not** a sops secret. This ADR
+originally specified a sops-nix secret; that remains the intent, but it cannot be
+the *first* state: `nixos-install` signs the UKI before there is a booted system or
+a host age key to decrypt with, so the first bundle is necessarily on-device.
+Capturing it into sops afterwards is tracked as
+[#32](https://github.com/r4stered/drewos/issues/32).
 
 ## Considered Options
 
@@ -34,5 +41,7 @@ on the unlocked machine); lanzaboote's key paths point at the sops secret path.
 - Media signed **only** by Microsoft (stock Windows installer, some vendor recovery
   ISOs, MS-signed memtest) will not boot; sign it yourself or disable Secure Boot in
   BIOS temporarily to run rescue media.
-- The SB signing key's blast radius now rests on the **admin age key** — losing it (or
-  leaking it) compromises the whole secure-boot chain. Back it up accordingly.
+- Until #32 lands, the Secure Boot signing key has **no off-machine copy**, and its loss
+  costs a BIOS-level re-enroll rather than a restore (CONTEXT.md states the exact cost).
+  Once #32 lands, the key's blast radius moves onto the **admin age key**, and losing
+  *that* would compromise the whole secure-boot chain.

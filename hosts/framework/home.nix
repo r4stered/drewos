@@ -1,14 +1,10 @@
-# User environment via home-manager wired as a NixOS module (ADR-0004, #19).
+# User environment via home-manager wired as a NixOS module (ADR-0004).
 #
 # home-manager rides inside the system generation (`home-manager.nixosModules.home-manager`
 # is imported in flake.nix), so ONE `nixos-rebuild switch` builds system + user config into
 # ONE generation with ONE rollback, all inside the same Secure-Boot-signed, TPM-sealed
 # generation. `useGlobalPkgs` = share the system's nixpkgs (one channel, no drift);
 # `useUserPackages` = user packages install as part of system activation.
-#
-# Scope now covers the daily-driver userland: terminal, editors, browser, music, and the
-# CLI tooling that makes NixOS itself pleasant. The earlier "deferred until COSMIC is
-# proven on hardware (#20)" note is discharged.
 #
 # Application CONFIG is deliberately NOT declared here — only which applications exist.
 # nvim ships with no plugins, VS Code's extensions are installed by clicking, Firefox's
@@ -114,7 +110,7 @@
         enableFishIntegration = true;
       };
 
-      # --- Git + SSH commit signing (decision #14 / ADR-0004) ---
+      # --- Git + SSH commit signing ---
       # Sign every commit and annotated tag with a dedicated on-machine SSH key. The key is
       # generated on first activation (host-key-style, see below), never committed, and is
       # distinct from any push/auth key — the sign and push roles never blur.
@@ -138,8 +134,8 @@
       };
 
       # Materialise the committed allowed_signers at the stable path the git config expects.
-      # The pubkey line is filled in during the first-boot bootstrap ritual (#24); until then
-      # this is a comment-only placeholder and signatures read as unverified — expected.
+      # Editing that file changes the system's store hash — its bytes are part of the
+      # generation — so a rotation is a rebuild, not just a file edit.
       home.file.".config/git/allowed_signers".source = ./allowed_signers;
 
       # --- Personal userland packages ---
@@ -179,13 +175,13 @@
       # re-upload the public half. Idempotent — only generates when absent, never clobbers an
       # existing key. No passphrase; protected at rest by LUKS.
       #
-      # LOAD-BEARING CAVEAT (tracked in the #24 acceptance checklist): once the public half is
-      # uploaded to GitHub as a Signing key, NEVER delete that old public key from GitHub. SSH
-      # signing keys carry no validity window, so removing it reverts all history signed with it
-      # to "unverified". Rotating = add the new key, keep the old one forever.
+      # LOAD-BEARING CAVEAT: once the public half is uploaded to GitHub as a Signing key, NEVER
+      # delete that old public key from GitHub. SSH signing keys carry no validity window, so
+      # removing it reverts all history signed with it to "unverified". Rotating = add the new
+      # key, keep the old one forever.
       #
-      # The manual half of the bootstrap (upload pubkey to GitHub, paste it into allowed_signers,
-      # commit) is the #24 ritual — this only makes the key exist.
+      # This only makes the key EXIST. The manual half — upload the pubkey to GitHub, paste it
+      # into allowed_signers, commit — cannot be declared; see docs/hardware-acceptance.md.
       home.activation.generateCommitSigningKey =
         lib.hm.dag.entryAfter [ "writeBoundary" ] ''
           keyPath="$HOME/.ssh/id_ed25519_signing"

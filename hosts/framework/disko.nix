@@ -1,4 +1,4 @@
-# Declarative disk layout (#17) — replaces the #16 ext4 stub wholesale.
+# Declarative disk layout.
 #
 # GPT with a ~1G vfat ESP (/boot) and a single LUKS2 container spanning the rest.
 # Inside the LUKS container: one btrfs filesystem with subvolumes /root, /home,
@@ -10,9 +10,9 @@ let
 in
 {
   disko.devices.disk.main = {
-    # PLACEHOLDER — set this at install time from `lsblk` (e.g. /dev/nvme0n1).
-    # The real device name is an install-time fact, not a config decision, so it
-    # is deliberately NOT a real value committed here.
+    # Correct for a single-NVMe Framework 13, but VERIFY WITH `lsblk` BEFORE RUNNING
+    # DISKO — it destroys whatever is at this path. The install pulls the config from
+    # GitHub, so a correction must be committed and pushed before installing.
     device = "/dev/nvme0n1";
     type = "disk";
     content = {

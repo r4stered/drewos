@@ -1,25 +1,31 @@
-# Hardware Acceptance Checklist
+# Hardware Acceptance and Re-enrollment Run-book
 
 The manual seam. A `nixos-rebuild dry-build` proves the config *evaluates*; it
 cannot prove that Secure Boot enrolls, the TPM unlocks, a finger reads, a commit
 signs, or a secret decrypts on **this** physical Framework 13. Those are
-hardware-and-firmware facts, established once, by hand, on the machine. This is
-the ritual Drew runs to sign off that the laptop actually *is* the machine the
-repo describes.
+hardware-and-firmware facts, established by hand, on the machine.
+
+**Bring-up is complete — this is now a document you come back to.** The laptop is
+installed and everything below has been run and proven once. What keeps this
+document live is that several of its steps are **expected to recur**:
+
+| You are doing this | Run |
+|---|---|
+| Reinstalling, or replacing the disk | The whole run-book, Phase B onward |
+| Recovering a lost admin age key, or changing the password | Phase A |
+| A firmware update broke the TPM unlock | *LUKS* → **Re-enroll note** (routine, [ADR-0003](adr/0003-luks-tpm-pin-encrypted-btrfs.md)) |
+| Re-enrolling Secure Boot keys | C4, then C5 — PCR 7 shifts, so the TPM keyslot must be re-created |
+| Rotating the commit signing key | *Commit signing* |
+| Locked out by a secret that won't decrypt | *Secrets* → **Recovery** |
+
+Day-to-day operation is not here — see **[Day-to-day operations](#day-to-day-operations)**
+at the end.
 
 > **Read the run-book straight through before you start.** This document is
 > ordered, and the order is load-bearing — several steps are impossible if done
 > out of sequence, and two of them (the sbctl keys, the LUKS fallbacks) cannot be
 > retrofitted after the fact without a reinstall or a lockout. The per-subsystem
 > sections further down are *detail and recovery*, not an alternative sequence.
-
-> **Posture note — this doc follows the ADRs, not the old handoff.** Two steps
-> from the original project handoff are **reversed** here and the old wording is
-> dead:
-> - Desktop is **COSMIC**, not GNOME. ([ADR-0005](adr/0005-cosmic-desktop-cold-boot-power.md))
-> - Secure Boot is **enrolled with our own keys and turned ON**, *not* disabled.
->   Anywhere the handoff says "disable Secure Boot", read "enroll our keys and
->   enable it". ([ADR-0002](adr/0002-custom-key-secure-boot-via-lanzaboote.md))
 
 ---
 
@@ -79,11 +85,11 @@ nix --extra-experimental-features 'nix-command flakes' ...
 sets `IdleAction = "poweroff"` at `IdleActionSec = "20min"`, and logind idle is
 **input**-idle — not CPU-idle. A 40-minute build with your hands off the trackpad
 powers the machine off mid-build. This is a stated, accepted trade-off of the
-cold-boot posture, and the config is deliberately **not** weakened for bring-up.
-Wrap long commands instead:
+cold-boot posture, and the config is deliberately **not** weakened to accommodate
+it. Wrap long commands instead:
 
 ```
-systemd-inhibit --what=idle:shutdown:sleep --why="bring-up build" \
+systemd-inhibit --what=idle:shutdown:sleep --why="install build" \
   sudo nixos-rebuild switch --flake github:r4stered/drewos#framework
 
 systemd-inhibit --what=idle:shutdown --why="fwupd flash" \
@@ -106,6 +112,10 @@ local file.
 
 ## Top-level checklist
 
+Every box below was ticked during the original bring-up. They are left unchecked
+deliberately: this is a **per-run template**, and a reinstall has to earn each one
+again on the new disk.
+
 - [ ] **Firmware/config merged to `main`** — the install pulls the default branch
 - [ ] **LUKS fallbacks:** passphrase keyslot *and* recovery key both in the password manager, enrolled in the installer
 - [ ] **Secrets (sops):** host key generated *before* the first install, both recipients in `.sops.yaml`, secrets decrypt at activation, no plaintext in the repo
@@ -125,12 +135,15 @@ local file.
 
 ## Phase A — on the dev machine, before touching the laptop
 
-> **Already done as of #18 — skip to Phase B.** `.sops.yaml` carries a real admin
-> recipient and `secrets/users.yaml` is committed as ciphertext, so Phase A is
-> recorded here for the *re-do* cases (a lost admin age key, a password change, a
-> fresh start), not as pending work. Do **not** run step A1 again on the current
-> setup: a new admin age key cannot decrypt the already-committed ciphertext, and
-> the `sops updatekeys` in Phase B would then fail with nothing able to re-key it.
+> **Done, and rarely re-run — for a reinstall, skip to Phase B.** `.sops.yaml`
+> carries a real admin recipient and `secrets/users.yaml` is committed as
+> ciphertext. This phase applies only to the re-do cases: a lost admin age key, a
+> password change, or a fresh start. A **reinstall does not need it** — the admin
+> key lives in the password manager and survives the machine.
+>
+> Do **not** run A1 against the current setup. A new admin age key cannot decrypt
+> the already-committed ciphertext, and the `sops updatekeys` in B6 would then fail
+> with nothing able to re-key it.
 
 **A1. Generate the admin age key.** Print it to the terminal; do *not* write it to
 a file on a machine that isn't encrypted at rest:
@@ -273,12 +286,20 @@ the admin key doing the one job it exists for. Commit and push **to `main`**.
 Confirm it took: the build-time warning in `secrets.nix` should now be gone, and
 `secrets/users.yaml` should carry two `recipient:` lines.
 
-**B7. Install**, pulling the just-pushed commit:
+**B7. Install**, pinning the exact commit you just pushed in B6:
 
 ```
 systemd-inhibit --what=idle:shutdown:sleep --why="nixos-install" \
-  nixos-install --no-root-passwd --flake github:r4stered/drewos#framework
+  nixos-install --no-root-passwd \
+  --flake github:r4stered/drewos/<sha-from-B6>#framework
 ```
+
+**Pin the SHA, do not use the bare branch name.** `nixos-install` has no
+`--refresh` (unlike `nixos-rebuild`), so if the installer is holding a cached copy
+of `main` there is no flag to invalidate it — and installing the commit *before*
+B6 means the ciphertext has no recipient this machine holds, which is a first-boot
+lockout. A SHA is unambiguous and cannot go stale. Get it with `git rev-parse HEAD`
+on the dev machine after pushing.
 
 `--no-root-passwd` because root is declaratively locked (`users.users.root.hashedPassword = "!"`)
 and `users.mutableUsers = false` would discard anything the prompt collected anyway.
@@ -360,7 +381,7 @@ is current, keys are enrolled, and SB is on. Detail in the *LUKS* section below.
 
 ## Secure Boot — enroll our keys, enable, confirm signed-UKI boot
 
-*Relates to slice #21 (lanzaboote). See [ADR-0002](adr/0002-custom-key-secure-boot-via-lanzaboote.md).*
+*See [ADR-0002](adr/0002-custom-key-secure-boot-via-lanzaboote.md).*
 
 We own the entire key hierarchy: `sbctl`-generated PK/KEK/db, **no shim, no
 Microsoft keys**. lanzaboote signs a Unified Kernel Image (kernel + initrd +
@@ -404,7 +425,7 @@ cost of the single-loader design, not an oversight.
 
 ## LUKS TPM+PIN — enroll, unlock, fallbacks, re-enroll
 
-*Relates to slice #23. See [ADR-0003](adr/0003-luks-tpm-pin-encrypted-btrfs.md).*
+*See [ADR-0003](adr/0003-luks-tpm-pin-encrypted-btrfs.md).*
 
 The root disk is a single LUKS2 container (everything but the ~1G ESP). Unlock is
 via the TPM sealed to **PCR 7** **and** a **PIN**. The PIN is load-bearing: the
@@ -454,7 +475,7 @@ them:
 
 ## Fingerprint — reader present, firmware current, enroll, gating
 
-*Relates to slice #22. Uses the in-tree libfprint (no vendor TOD driver).*
+*Uses the in-tree libfprint (no vendor TOD driver).*
 
 1. **Confirm the reader is present** on USB:
    ```
@@ -480,7 +501,7 @@ them:
 
 ## Commit signing — bootstrap the dedicated SSH signing key
 
-*Relates to slice #19. See CONTEXT.md, "Commit signing key".*
+*See CONTEXT.md, "Commit signing key".*
 
 This is a **dedicated** Ed25519 SSH key that signs commits and tags — distinct
 from the SSH key that authenticates pushes, so the sign and push roles never blur.
@@ -533,7 +554,7 @@ about the public half.
 
 ## Secrets (sops) — verification, re-keying, recovery
 
-*Relates to slice #18. See CONTEXT.md, "Host age key" / "Admin age key".*
+*See CONTEXT.md, "Host age key" / "Admin age key"; [ADR-0007](adr/0007-host-age-key-by-hand-no-sshd.md).*
 
 Every secret is encrypted to two recipients — the admin age key (off-machine, in
 the password manager) and the laptop's host age key (its SSH host key, root-only
@@ -628,3 +649,109 @@ checks the dry-build can't reach.
       **trackpad keeps working even in tiling mode** (tiling is a per-workspace
       toggle, never keyboard-only). If any of this feels wrong, this is where the
       gap gets recorded and chased.
+
+---
+
+# Day-to-day operations
+
+Everything above is a ritual you run rarely. This is the part you use constantly.
+It is written down because every item here cost real friction during bring-up.
+
+## Rebuild from a local clone
+
+```
+sudo nixos-rebuild switch --flake .#framework
+```
+
+The `.#framework` is a path plus an attribute — `.` is the flake in the current
+directory. To rebuild straight from GitHub instead (what the installer does):
+
+```
+sudo nixos-rebuild switch --flake github:r4stered/drewos#framework
+```
+
+Useful variants:
+
+- `nixos-rebuild build` — build only, change nothing. The fast feedback loop.
+- `nixos-rebuild switch --rollback` — go back one generation without rebooting.
+- `nix flake update` then `switch` — move the whole closure forward; `flake.lock`
+  is what makes this deliberate rather than ambient.
+
+## New `.nix` files must be `git add`ed before a flake sees them
+
+This is the single most confusing failure in the repo, because the error names a
+missing file that is plainly right there.
+
+```
+git add hosts/framework/newthing.nix
+```
+
+Flakes copy the **git-tracked** tree into the store. An untracked file does not
+exist as far as `nixos-rebuild --flake` is concerned, even when it sits in the
+working directory. It does **not** need to be committed — staged is enough.
+
+## `--refresh` works on `nixos-rebuild`, not on `nixos-install`
+
+`nixos-rebuild --flake github:...` caches the flake reference. `--refresh` forces
+it to re-fetch, which is how you pick up a commit you just pushed:
+
+```
+sudo nixos-rebuild switch --refresh --flake github:r4stered/drewos#framework
+```
+
+**`nixos-install` does not accept `--refresh`.** In the installer you may be
+holding a stale copy of the branch with no flag to invalidate it — which is
+precisely why **B7 pins an explicit commit SHA** rather than trusting the branch
+name. Pin the SHA there and the ambiguity disappears:
+
+```
+nixos-install --flake github:r4stered/drewos/<sha>#framework
+```
+
+## Long jobs need `systemd-inhibit`
+
+`IdleAction = "poweroff"` at 20 minutes, and logind idle is **input**-idle, not
+CPU-idle ([ADR-0005](adr/0005-cosmic-desktop-cold-boot-power.md)). A long build
+with your hands off the trackpad powers the machine off mid-build. This is a
+stated trade-off of the cold-boot posture, not a bug to fix — wrap the command:
+
+```
+systemd-inhibit --what=idle:shutdown:sleep --why="big rebuild" \
+  sudo nixos-rebuild switch --flake .#framework
+
+systemd-inhibit --list      # what is currently holding things off
+```
+
+Use it for anything unattended: a large rebuild, a `nix flake update` that
+rebuilds the world, a big download. For `fwupdmgr update` it is **mandatory** — an
+idle poweroff during a firmware flash is a bricking scenario.
+
+## Rolling back at the boot menu
+
+Every `switch` leaves the previous generation bootable. At the boot menu, pick an
+earlier NixOS generation — this is the recovery path for a config that builds fine
+but breaks the running system, including a sops secret that fails to decrypt and
+leaves no working password (`users.mutableUsers = false`, so `passwd` is not a fix).
+
+From a working system, the same thing without rebooting:
+
+```
+sudo nixos-rebuild switch --rollback
+nixos-rebuild list-generations
+sudo nix-collect-garbage --delete-older-than 30d   # prunes old generations
+```
+
+Note the boot menu is the **only** recovery route when the failure is in
+activation itself, since there is no fallback bootloader
+([ADR-0002](adr/0002-custom-key-secure-boot-via-lanzaboote.md): lanzaboote owns
+the single entry). If no generation boots, the route is install media.
+
+## Checking the boot chain is still intact
+
+After a firmware update or a Secure Boot re-enrollment:
+
+```
+sbctl status          # keys enrolled, Secure Boot on
+sbctl verify          # the UKI(s) under /boot/EFI are signed
+bootctl status        # "Secure Boot: enabled (user)"
+```
