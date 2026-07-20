@@ -180,6 +180,7 @@
         unzip
         wget
         nodejs # node + npm + npx + corepack (npx ships inside this derivation)
+        gh # GitHub CLI — replaces `nix run nixpkgs#gh`; auth stays interactive/out-of-repo
       ];
 
       # --- Commit signing key: generated on first boot, host-key-style ---
