@@ -152,6 +152,17 @@
         # the COSMIC module already enables pipewire (with pulse + alsa) and rtkit.
         spotify
 
+        # The ONLY package on this machine from the second (unstable) channel — see the
+        # overlay in flake.nix and ADR-0008. Stable pins it for six months while upstream
+        # ships weekly, and its self-updater cannot write to a read-only /nix/store, so the
+        # stable version cannot catch up. Qualifies as a leaf tool: nothing depends on it,
+        # and if unstable breaks it the machine still boots and unlocks.
+        #
+        # Home rather than system, by CONTEXT.md's tie-break: a second user would not need it.
+        # Unfree — named in the overlay's OWN predicate in flake.nix, not the list in
+        # default.nix, because a separately-imported nixpkgs cannot see `nixpkgs.config`.
+        claude-code
+
         # `,` — runs a program once from nixpkgs without installing it (`, rg foo`). Pairs
         # with programs.nix-index above: nix-index tells you which package has the command,
         # comma lets you just use it without committing it to this file.

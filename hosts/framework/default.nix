@@ -241,6 +241,10 @@
   # FAILURE naming the package; that failure is the feature.
   #
   # `lib.getName` yields the pname, so match pnames here, not versioned derivation names.
+  # NOT the complete inventory of unfree packages on this machine. This option configures
+  # the SYSTEM's nixpkgs instance only; the unstable instance imported by the overlay in
+  # flake.nix (ADR-0008) carries its own predicate, and claude-code is named there. Two
+  # lists, same discipline — check both before concluding nothing else is unfree.
   nixpkgs.config.allowUnfreePredicate =
     pkg: builtins.elem (lib.getName pkg) [
       "vscode"
