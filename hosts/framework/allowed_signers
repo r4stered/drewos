@@ -14,4 +14,4 @@
 #   4. commit this file
 #
 # Until filled, signatures verify as unverified locally — expected, not a bug.
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN2ATR0DHwQz48bQTqUO4KFySdXaBcbjssm3seEGsoJf drewos commit signing key
+williams.r.drew@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN2ATR0DHwQz48bQTqUO4KFySdXaBcbjssm3seEGsoJf drewos commit signing key
