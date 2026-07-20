@@ -179,6 +179,7 @@
         file
         unzip
         wget
+        nodejs # node + npm + npx + corepack (npx ships inside this derivation)
       ];
 
       # --- Commit signing key: generated on first boot, host-key-style ---
